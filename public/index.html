@@ -51,11 +51,12 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
 }
 .brand{display:flex;align-items:center;gap:10px;flex-shrink:0}
 .brand-mark{
-  width:32px;height:32px;border-radius:8px;
-  background:linear-gradient(135deg,var(--orange),#c45a12);
+  width:36px;height:36px;border-radius:9px;
+  background:#111;border:1px solid var(--line);
   display:flex;align-items:center;justify-content:center;
-  font-size:11px;font-weight:900;color:#fff;letter-spacing:-.5px;
+  overflow:hidden;flex-shrink:0;padding:3px;
 }
+.brand-mark img{width:100%;height:100%;object-fit:contain;display:block}
 .brand h1{font-size:15px;font-weight:800;letter-spacing:-.4px;line-height:1.05}
 .brand p{font-size:9px;color:var(--faint);font-weight:600;letter-spacing:.4px;text-transform:uppercase}
 .top-search{flex:1;min-width:0}
@@ -142,6 +143,17 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
   margin-bottom:12px;aspect-ratio:16/9;position:relative;
 }
 .player-box iframe,.player-box video{width:100%;height:100%;border:0;display:block;background:#000}
+.player-fallback{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;text-align:center;background:#121218;gap:10px}
+.player-fallback h4{font-size:14px;font-weight:700}
+.player-fallback p{font-size:12px;color:var(--muted);line-height:1.45;max-width:280px}
+.player-fallback .fb-btns{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:6px}
+.player-fallback a,.player-fallback button{
+  display:inline-flex;align-items:center;gap:6px;padding:10px 14px;border-radius:10px;
+  border:1px solid var(--line);background:var(--card);color:var(--text);
+  font-size:12.5px;font-weight:650;font-family:var(--font);text-decoration:none;cursor:pointer;
+}
+.player-fallback a.primary,.player-fallback button.primary{background:var(--orange);border-color:var(--orange);color:#fff}
+
 .server-row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
 .srv{
   padding:8px 14px;border-radius:100px;border:1px solid var(--line);background:var(--card);
@@ -197,7 +209,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
 <div class="app" id="app">
   <header class="top">
     <div class="brand">
-      <div class="brand-mark">XA</div>
+      <div class="brand-mark"><img src="logo-jiyyad.png" alt="JIYYAD TOOLS"/></div>
       <div>
         <h1>XANIMEHUB</h1>
         <p>Jiyyad Tools</p>
@@ -414,16 +426,48 @@ async function openDetail(url){
   }
 }
 
-function setPlayer(embedOrUrl){
+function setPlayer(embedOrUrl, meta){
   const box=$('#player-box');
-  if(!embedOrUrl){box.innerHTML='<div class="empty">Stream tidak tersedia</div>';return}
+  meta = meta || {};
+  if(!embedOrUrl){
+    box.innerHTML='<div class="player-fallback"><h4>Stream tidak tersedia</h4><p>API tidak mengembalikan URL video untuk episode ini.</p></div>';
+    return;
+  }
   const isDirect=/\.(mp4|m3u8|webm)(\?|$)/i.test(embedOrUrl);
   if(isDirect){
     const src=/^https?:\/\//i.test(embedOrUrl)?'/api/proxy?url='+encodeURIComponent(embedOrUrl):embedOrUrl;
     box.innerHTML=`<video controls playsinline autoplay src="${esc(src)}"></video>`;
-  } else {
-    box.innerHTML=`<iframe src="${esc(embedOrUrl)}" allowfullscreen allow="autoplay; fullscreen; encrypted-media"></iframe>`;
+    return;
   }
+  // embed iframe + fallback overlay helper
+  const host = (()=>{ try{ return new URL(embedOrUrl).hostname }catch{ return '' }})();
+  box.innerHTML = `
+    <iframe id="stream-frame" src="${esc(embedOrUrl)}" allowfullscreen allow="autoplay; fullscreen; encrypted-media"></iframe>
+    <div class="player-fallback" id="stream-fallback" style="display:none">
+      <h4>Server embed gagal</h4>
+      <p>Host <b>${esc(host||'embed')}</b> tidak bisa diakses (DNS/blokir). Coba server lain, buka di tab baru, atau pakai download.</p>
+      <div class="fb-btns">
+        <a class="primary" href="${esc(embedOrUrl)}" target="_blank" rel="noopener">Buka embed</a>
+        <button type="button" id="fb-retry">Coba lagi</button>
+      </div>
+    </div>`;
+  // show fallback after delay if iframe still blank-ish (can't always detect cross-origin)
+  clearTimeout(setPlayer._t);
+  setPlayer._t = setTimeout(()=>{
+    const fb = $('#stream-fallback');
+    if(fb) fb.style.display = 'flex';
+  }, 6000);
+  const retry = () => {
+    const fb = $('#stream-fallback');
+    if(fb) fb.style.display = 'none';
+    const fr = $('#stream-frame');
+    if(fr){ fr.src = embedOrUrl; }
+    clearTimeout(setPlayer._t);
+    setPlayer._t = setTimeout(()=>{ const f=$('#stream-fallback'); if(f) f.style.display='flex'; }, 6000);
+  };
+  setTimeout(()=>{
+    $('#fb-retry')?.addEventListener('click', retry);
+  }, 0);
 }
 
 async function openEpisode(url, animeTitle){
@@ -468,13 +512,22 @@ async function openEpisode(url, animeTitle){
     if(Array.isArray(dls)&&dls.length){
       $('#downloads').innerHTML=dls.map(x=>{
         const link=x.url||x.href||x.link||'';
-        const label=x.quality||x.server||x.name||'Download';
+        const label=x.label||x.quality||x.server||x.name||'Download';
         const size=x.size||'';
         if(!link) return '';
-        return `<a class="dl-item" href="${esc(link)}" target="_blank" rel="noopener"><div>${esc(label)}</div><span>${esc(size)} ↘</span></a>`;
+        return `<a class="dl-item" href="${esc(link)}" target="_blank" rel="noopener"><div>${esc(label)}</div><span>${esc(size||'Buka')} ↘</span></a>`;
       }).join('')||'<div class="empty">Tidak ada link download</div>';
     } else {
       $('#downloads').innerHTML='<div class="empty">Tidak ada link download untuk episode ini</div>';
+    }
+    // external stream shortcut
+    const ext = r.stream_url||r.embed_url||r.video_embed;
+    if(ext){
+      const row = document.createElement('div');
+      row.className = 'server-row';
+      row.style.marginTop = '4px';
+      row.innerHTML = `<a class="srv" href="${esc(ext)}" target="_blank" rel="noopener" style="text-decoration:none">↗ Buka stream di tab baru</a>`;
+      $('#servers').parentNode?.insertBefore(row, $('#servers').nextSibling);
     }
 
     // episode list from current anime if available
